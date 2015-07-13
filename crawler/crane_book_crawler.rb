@@ -2,6 +2,7 @@ require 'crawler_rocks'
 require 'pry'
 require 'json'
 require 'iconv'
+require 'isbn'
 
 require 'thread'
 require 'thwait'
@@ -132,6 +133,8 @@ class CraneBookCrawler
             @books[internal_code][key] = attr_data.rpartition('：')[-1]
           }
 
+          @books[internal_code][:isbn] = isbn_to_13(@books[internal_code][:isbn]) if @books[internal_code][:isbn]
+
           @books[internal_code][:external_image_url] = URI.join(@index_url, doc.xpath('//div[@id="image"]/img/@src').to_s.strip).to_s
 
           print "#{internal_code}\n"
@@ -140,6 +143,38 @@ class CraneBookCrawler
       # end # end thread
     end
   end
+
+  def isbn_to_13 isbn
+    case isbn.length
+    when 13
+      return ISBN.thirteen isbn
+    when 10
+      return ISBN.thirteen isbn
+    when 12
+      return "#{isbn}#{isbn_checksum(isbn)}"
+    when 9
+      return ISBN.thirteen("#{isbn}#{isbn_checksum(isbn)}")
+    end
+  end
+
+  def isbn_checksum(isbn)
+    isbn.gsub!(/[^(\d|X)]/, '')
+    c = 0
+    if isbn.length <= 10
+      10.downto(2) {|i| c += isbn[10-i].to_i * i}
+      c %= 11
+      c = 11 - c
+      c ='X' if c == 10
+      return c
+    elsif isbn.length <= 13
+      (1..11).step(2) {|i| c += isbn[i].to_i}
+      c *= 3
+      (0..11).step(2) {|i| c += isbn[i].to_i}
+      c = (220-c) % 10
+      return c
+    end
+  end
+
 end
 
 cc = CraneBookCrawler.new
