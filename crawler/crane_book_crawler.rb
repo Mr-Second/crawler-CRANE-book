@@ -3,6 +3,7 @@ require 'pry'
 require 'json'
 require 'iconv'
 require 'isbn'
+require 'book_toolkit'
 
 require 'thread'
 require 'thwait'
@@ -18,7 +19,10 @@ class CraneBookCrawler
     "代理商" => :agent,
   }
 
-  def initialize
+  def initialize update_progress: nil, after_each: nil
+    @update_progress_proc = update_progress
+    @after_each_proc = after_each
+
     @index_url = "http://www.crane.com.tw/ec99/crane/default.asp"
     @category_url = "http://www.crane.com.tw/ec99/crane/ShowCategory.asp?category_id="
   end
@@ -108,20 +112,21 @@ class CraneBookCrawler
       url = URI.join(@index_url, datas.css('a.goodsitem')[0][:href].strip).to_s unless datas.css('a.goodsitem').empty?
       # id = url.match(/(?<=prod_id=).+/).to_s
       internal_code = datas.css('font.goodsmain').text
-      price = datas.css('font.goodscostd').text.gsub(/[^\d]/, '').to_i
+      original_price = datas.css('font.goodscostd').text.gsub(/[^\d]/, '').to_i
 
       @books[internal_code] = {
         name: name,
         url: url,
         internal_code: internal_code,
-        price: price
+        original_price: original_price,
+        known_supplier: 'crane'
       }
 
-      # sleep(1) until (
-      #   @detail_threads.delete_if { |t| !t.status };  # remove dead (ended) threads
-      #   @detail_threads.count < (ENV['MAX_THREADS'] || 30)
-      # )
-      # @detail_threads << Thread.new do
+      sleep(1) until (
+        @detail_threads.delete_if { |t| !t.status };  # remove dead (ended) threads
+        @detail_threads.count < (ENV['MAX_THREADS'] || 30)
+      )
+      @detail_threads << Thread.new do
         if url && url != @index_url
           r = RestClient.get url
           doc = Nokogiri::HTML(r)
@@ -133,49 +138,21 @@ class CraneBookCrawler
             @books[internal_code][key] = attr_data.rpartition('：')[-1]
           }
 
-          @books[internal_code][:isbn] = isbn_to_13(@books[internal_code][:isbn]) if @books[internal_code][:isbn]
+          begin
+            @books[internal_code][:isbn] = BookToolkit.to_isbn13(@books[internal_code][:isbn]) if @books[internal_code][:isbn]
+          rescue Exception => e
+            @books[internal_code][:isbn] = nil
+          end
 
           @books[internal_code][:external_image_url] = URI.join(@index_url, doc.xpath('//div[@id="image"]/img/@src').to_s.strip).to_s
 
-          print "#{internal_code}\n"
+          @after_each_proc.call(book: @books[internal_code]) if @after_each_proc
+          # print "#{internal_code}\n"
         end
-
-      # end # end thread
+      end # end thread
     end
   end
-
-  def isbn_to_13 isbn
-    case isbn.length
-    when 13
-      return ISBN.thirteen isbn
-    when 10
-      return ISBN.thirteen isbn
-    when 12
-      return "#{isbn}#{isbn_checksum(isbn)}"
-    when 9
-      return ISBN.thirteen("#{isbn}#{isbn_checksum(isbn)}")
-    end
-  end
-
-  def isbn_checksum(isbn)
-    isbn.gsub!(/[^(\d|X)]/, '')
-    c = 0
-    if isbn.length <= 10
-      10.downto(2) {|i| c += isbn[10-i].to_i * i}
-      c %= 11
-      c = 11 - c
-      c ='X' if c == 10
-      return c
-    elsif isbn.length <= 13
-      (1..11).step(2) {|i| c += isbn[i].to_i}
-      c *= 3
-      (0..11).step(2) {|i| c += isbn[i].to_i}
-      c = (220-c) % 10
-      return c
-    end
-  end
-
 end
 
-cc = CraneBookCrawler.new
-File.write('crane_books.json', JSON.pretty_generate(cc.books))
+# cc = CraneBookCrawler.new
+# File.write('crane_books.json', JSON.pretty_generate(cc.books))
